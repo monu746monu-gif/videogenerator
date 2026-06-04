@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+dist/
+build/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Generated media and captures
+public/generated/*
+!public/generated/.gitkeep
+!public/generated/recordings/
+public/generated/recordings/*
+!public/generated/recordings/.gitkeep
+!public/generated/screenshots/
+public/generated/screenshots/*
+!public/generated/screenshots/.gitkeep
+!public/generated/videos/
+public/generated/videos/*
+!public/generated/videos/.gitkeep
+
+# Playwright and test output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# Remotion and renderer caches
+.remotion/
+node_modules/.remotion/
+
+# Tool caches
+.cache/
+.turbo/
+.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
