@@ -1,13 +1,25 @@
-import { execFile } from "node:child_process";
-import { access, mkdir, rename, unlink } from "node:fs/promises";
+import { access, unlink } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { convertToMp4, ensureGeneratedFolders } from "@/lib/media";
 import { normalizeHttpUrl } from "@/lib/url";
+import {
+  canonicalUrl,
+  isAllowedInternalUrl,
+  maxSelectedPages,
+  safeClickKeywords,
+  scoreLink,
+  selectImportantPages,
+  shouldSkipUrl,
+  uniqueLinks,
+  type CandidateLink
+} from "@/lib/website-links";
 
-const execFileAsync = promisify(execFile);
 const viewport = { width: 1080, height: 1920 };
+const maxPages = maxSelectedPages + 1;
+const maxPageTimeMs = 12000;
+const maxTotalTimeMs = 90000;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,54 +28,117 @@ export const maxDuration = 300;
 export async function POST(request: Request) {
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
-  let recordedPath: string | undefined;
 
   try {
-    const body = await request.json();
-    const url = normalizeHttpUrl(String(body.url || ""));
+    const body = (await request.json()) as { url?: unknown; selectedPages?: unknown };
+    const startUrl = normalizeHttpUrl(String(body.url || ""));
+    const origin = new URL(startUrl).origin;
+    const requestedPages = Array.isArray(body.selectedPages)
+      ? body.selectedPages.map((pageUrl: unknown) => String(pageUrl)).filter((pageUrl: string) => isAllowedInternalUrl(pageUrl, origin)).slice(0, maxSelectedPages)
+      : [];
+    const startedAt = Date.now();
+    const visitedPages: string[] = [];
 
-    const outputDir = path.join(process.cwd(), "public", "generated", "recordings");
-    await mkdir(outputDir, { recursive: true });
+    console.log("[record-website] starting URL", startUrl);
+
+    const { recordingsDir, videosDir } = await ensureGeneratedFolders();
 
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({
       viewport,
       recordVideo: {
-        dir: outputDir,
+        dir: recordingsDir,
         size: viewport
       },
-      userAgent: "Mozilla/5.0 Website Walkthrough Recorder MVP"
+      userAgent: "Mozilla/5.0 Full Website Walkthrough Recorder MVP"
     });
 
     const page = await context.newPage();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForLoadState("load", { timeout: 15000 }).catch(() => undefined);
-    await page.locator("body").waitFor({ state: "visible", timeout: 15000 });
-    await page.waitForTimeout(2000);
-
-    await recordWalkthrough(page);
-
     const video = page.video();
+
+    await visitAndScroll(page, startUrl, startedAt, true, "Homepage");
+    visitedPages.push(canonicalUrl(startUrl));
+
+    const homepageLinks = await extractInternalLinks(page, origin);
+    console.log("[record-website] detected internal links count", homepageLinks.length);
+
+    const selectedPages = requestedPages.length
+      ? requestedPages.map((href) => ({ href: canonicalUrl(href), text: "", score: 100 }))
+      : selectImportantPages(homepageLinks, startUrl, Math.min(maxSelectedPages, maxPages - visitedPages.length));
+    console.log("[record-website] selected pages", selectedPages.map((link) => link.href));
+
+    const queue = [...selectedPages];
+    const queued = new Set(queue.map((link) => canonicalUrl(link.href)));
+    const visited = new Set(visitedPages);
+
+    while (queue.length && visitedPages.length < maxPages && Date.now() - startedAt < maxTotalTimeMs) {
+      const next = queue.shift();
+      if (!next) break;
+
+      const normalized = canonicalUrl(next.href);
+      if (visited.has(normalized) || shouldSkipUrl(next.href, origin)) {
+        continue;
+      }
+
+      try {
+        await visitAndScroll(page, next.href, startedAt, false, labelForUrl(next.href));
+        visited.add(normalized);
+        visitedPages.push(normalized);
+      } catch (error) {
+        console.warn("[record-website] skipping failed page", next.href, error instanceof Error ? error.message : error);
+        visited.add(normalized);
+        continue;
+      }
+
+      if (visitedPages.length >= maxPages || Date.now() - startedAt >= maxTotalTimeMs) {
+        break;
+      }
+
+      const safeLinks = await extractSafeActionLinks(page, origin);
+      for (const link of safeLinks) {
+        const safeUrl = canonicalUrl(link.href);
+        if (visited.has(safeUrl) || queued.has(safeUrl) || shouldSkipUrl(link.href, origin)) {
+          continue;
+        }
+
+        queue.push(link);
+        queued.add(safeUrl);
+        if (queue.length + visitedPages.length >= maxPages) {
+          break;
+        }
+      }
+    }
+
+    await page.waitForTimeout(1000);
     await context.close();
     context = undefined;
 
-    recordedPath = await video?.path();
-    if (!recordedPath) {
-      throw new Error("Playwright did not produce a recording.");
+    const rawVideoPath = await video?.path();
+    if (!rawVideoPath) {
+      throw new Error("Recording file not found.");
     }
+    await access(rawVideoPath);
+    console.log("[record-website] raw video path", rawVideoPath);
 
-    const outputName = `${Date.now()}-${safeHost(url)}-walkthrough.mp4`;
-    const outputPath = path.join(outputDir, outputName);
-    await convertToMp4(recordedPath, outputPath);
-    await unlink(recordedPath).catch(() => undefined);
+    const outputName = `full-walkthrough-${Date.now()}.mp4`;
+    const outputPath = path.join(videosDir, outputName);
+    await convertToMp4(rawVideoPath, outputPath);
+    await unlink(rawVideoPath).catch(() => undefined);
+
+    console.log("[record-website] final MP4 path", outputPath);
+    console.log("[record-website] total visited pages", visitedPages.length);
 
     return NextResponse.json({
-      videoUrl: `/generated/recordings/${outputName}`,
-      outputPath
+      success: true,
+      videoUrl: `/generated/videos/${outputName}`,
+      outputPath,
+      visitedPages,
+      selectedPages: selectedPages.map((link) => link.href)
     });
   } catch (error) {
+    console.error("[record-website] failed", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to record website walkthrough." },
+      { success: false, error: error instanceof Error ? error.message : "Failed to record website walkthrough." },
       { status: 500 }
     );
   } finally {
@@ -72,87 +147,116 @@ export async function POST(request: Request) {
   }
 }
 
-async function recordWalkthrough(page: Page) {
+async function visitAndScroll(page: Page, url: string, startedAt: number, returnToTop: boolean, label: string) {
+  if (Date.now() - startedAt >= maxTotalTimeMs) {
+    return;
+  }
+
+  console.log("[record-website] currently visiting page", url);
+  await gotoWithFallback(page, url);
+  await page.locator("body").waitFor({ state: "visible", timeout: 15000 });
+  await showOverlayLabel(page, label);
+  await page.waitForTimeout(returnToTop ? 2000 : 1500);
+
+  const pageHeight = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+  console.log("[record-website] page height", pageHeight);
+
   await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(500);
+  await smoothScrollPage(page, Math.min(Date.now() + maxPageTimeMs, startedAt + maxTotalTimeMs));
+  await page.waitForTimeout(900);
 
-  const scrollTargets = await page.evaluate((height) => {
-    const maxScroll = Math.max(0, document.documentElement.scrollHeight - height);
-    const sectionTops = Array.from(document.querySelectorAll("main, section, article, h1, h2"))
-      .map((element) => {
-        const top = element.getBoundingClientRect().top + window.scrollY;
-        return Math.max(0, Math.min(maxScroll, Math.round(top - 120)));
-      })
-      .filter((top) => top > 0);
-
-    const pageSteps = Array.from({ length: Math.ceil(maxScroll / Math.round(height * 0.65)) }, (_, index) =>
-      Math.min(maxScroll, Math.round((index + 1) * height * 0.65))
-    );
-
-    return Array.from(new Set([...sectionTops, ...pageSteps, maxScroll]))
-      .sort((a, b) => a - b)
-      .filter((top, index, values) => index === 0 || top - values[index - 1] > 220)
-      .slice(0, 12);
-  }, viewport.height);
-
-  for (const target of scrollTargets) {
-    await page.evaluate((top) => window.scrollTo({ top, behavior: "smooth" }), target);
-    await page.waitForTimeout(1600);
+  if (returnToTop && Date.now() - startedAt < maxTotalTimeMs) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    await page.waitForTimeout(1200);
   }
-
-  await page.waitForTimeout(1500);
 }
 
-async function convertToMp4(inputPath: string, outputPath: string) {
-  const ffmpegPath = await findFfmpeg();
-  const tempPath = `${outputPath}.tmp.mp4`;
+async function showOverlayLabel(page: Page, label: string) {
+  await page.evaluate((text) => {
+    const existing = document.getElementById("__walkthrough_label");
+    existing?.remove();
 
+    const labelElement = document.createElement("div");
+    labelElement.id = "__walkthrough_label";
+    labelElement.textContent = text;
+    labelElement.style.position = "fixed";
+    labelElement.style.left = "32px";
+    labelElement.style.top = "32px";
+    labelElement.style.zIndex = "2147483647";
+    labelElement.style.padding = "18px 24px";
+    labelElement.style.borderRadius = "14px";
+    labelElement.style.background = "rgba(17, 24, 39, 0.88)";
+    labelElement.style.color = "white";
+    labelElement.style.font = "700 32px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    labelElement.style.boxShadow = "0 20px 45px rgba(0, 0, 0, 0.22)";
+    labelElement.style.pointerEvents = "none";
+    document.documentElement.appendChild(labelElement);
+  }, label);
+}
+
+function labelForUrl(href: string) {
+  const pathname = new URL(href).pathname;
+  const segment = pathname.split("/").filter(Boolean).pop() || "Page";
+  return segment
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+async function gotoWithFallback(page: Page, url: string) {
   try {
-    await execFileAsync(ffmpegPath, [
-      "-y",
-      "-i",
-      inputPath,
-      "-vf",
-      "format=yuv420p",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-movflags",
-      "+faststart",
-      tempPath
-    ]);
-    await rename(tempPath, outputPath);
-  } catch (error) {
-    await unlink(tempPath).catch(() => undefined);
-    throw new Error(
-      `Failed to convert Playwright recording to MP4. Install ffmpeg or set FFMPEG_PATH. ${
-        error instanceof Error ? error.message : ""
-      }`.trim()
-    );
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+  } catch {
+    console.warn("[record-website] networkidle timeout or navigation issue, retrying with domcontentloaded", url);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("load", { timeout: 10000 }).catch(() => undefined);
   }
 }
 
-async function findFfmpeg() {
-  const candidates = [
-    process.env.FFMPEG_PATH,
-    "/opt/homebrew/bin/ffmpeg",
-    "/usr/local/bin/ffmpeg",
-    path.join(process.cwd(), "node_modules", "@remotion", "compositor-darwin-arm64", "ffmpeg")
-  ].filter(Boolean) as string[];
+async function smoothScrollPage(page: Page, deadline: number) {
+  while (Date.now() < deadline) {
+    const position = await page.evaluate(() => ({
+      totalHeight: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+      viewportHeight: window.innerHeight,
+      currentScroll: window.scrollY
+    }));
 
-  for (const candidate of candidates) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      // Try the next candidate.
+    if (position.currentScroll >= position.totalHeight - position.viewportHeight - 8) {
+      break;
     }
-  }
 
-  throw new Error("Install ffmpeg or set FFMPEG_PATH to convert Playwright recordings to MP4.");
+    await page.mouse.wheel(0, 250);
+    await page.waitForTimeout(250);
+  }
 }
 
-function safeHost(value: string): string {
-  return new URL(value).hostname.replace(/[^a-z0-9.-]/gi, "-").slice(0, 48);
+async function extractInternalLinks(page: Page, origin: string): Promise<CandidateLink[]> {
+  const links = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("a[href]"))
+      .filter((anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        const style = window.getComputedStyle(anchor);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      })
+      .map((anchor) => ({
+        href: (anchor as HTMLAnchorElement).href,
+        text: (anchor.textContent || "").replace(/\s+/g, " ").trim().toLowerCase()
+      }))
+  );
+
+  return uniqueLinks(
+    links
+      .filter((link) => isAllowedInternalUrl(link.href, origin))
+      .map((link) => ({ ...link, score: scoreLink(link) }))
+  );
+}
+
+async function extractSafeActionLinks(page: Page, origin: string): Promise<CandidateLink[]> {
+  const links = await extractInternalLinks(page, origin);
+  return links
+    .filter((link) => safeClickKeywords.some((keyword) => link.text.includes(keyword)))
+    .filter((link) => !shouldSkipUrl(link.href, origin))
+    .slice(0, 2);
 }

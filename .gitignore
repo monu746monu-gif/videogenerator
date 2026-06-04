@@ -21,6 +21,9 @@ public/generated/*
 !public/generated/recordings/
 public/generated/recordings/*
 !public/generated/recordings/.gitkeep
+!public/generated/audio/
+public/generated/audio/*
+!public/generated/audio/.gitkeep
 !public/generated/screenshots/
 public/generated/screenshots/*
 !public/generated/screenshots/.gitkeep

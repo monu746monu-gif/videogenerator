@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Website Launch Video Generator",
-  description: "Turn any website into a launch video script and MP4."
+  title: "AI Launch Video Generator",
+  description: "Generate a website walkthrough video with AI voice explanation."
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
