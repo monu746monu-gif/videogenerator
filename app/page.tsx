@@ -43,6 +43,7 @@ const renderSteps = ["Opening routed pages...", "Recording each scene...", "Gene
 
 export default function Home() {
   const [url, setUrl] = useState("");
+  const [founderName, setFounderName] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [loadingStep, setLoadingStep] = useState(0);
   const [websiteMap, setWebsiteMap] = useState<WebsiteMap | null>(null);
@@ -117,6 +118,7 @@ export default function Home() {
 
       const rendered = await postJson<RenderResponse>("/api/render-synced-video", {
         url,
+        founderName,
         websiteMap,
         videoRoute
       });
@@ -149,20 +151,28 @@ export default function Home() {
               Paste a product link, preview the 10-scene route, then render a video where each voiceover line matches the visible website section.
             </p>
 
-            <form onSubmit={handleCreateRoute} className="mt-9 flex flex-col gap-3 sm:flex-row">
+            <form onSubmit={handleCreateRoute} className="mt-9 grid gap-3">
               <input
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://example.com"
                 className="h-14 min-w-0 flex-1 rounded-lg border border-line bg-white px-5 text-base outline-none transition focus:border-action focus:ring-4 focus:ring-blue-100"
               />
-              <button
-                type="submit"
-                disabled={phase === "mapping" || phase === "rendering"}
-                className="h-14 rounded-lg bg-action px-7 font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-              >
-                Create Route Preview
-              </button>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  value={founderName}
+                  onChange={(event) => setFounderName(event.target.value)}
+                  placeholder="Founder name for final slide"
+                  className="h-14 min-w-0 flex-1 rounded-lg border border-line bg-white px-5 text-base outline-none transition focus:border-action focus:ring-4 focus:ring-blue-100"
+                />
+                <button
+                  type="submit"
+                  disabled={phase === "mapping" || phase === "rendering"}
+                  className="h-14 rounded-lg bg-action px-7 font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  Create Route Preview
+                </button>
+              </div>
             </form>
 
             {phase === "preview" || phase === "video" ? (
@@ -188,7 +198,7 @@ export default function Home() {
 
           <div className="flex items-center">
             <div className="w-full rounded-lg border border-line bg-mist p-4 shadow-soft">
-              <div className="relative aspect-[9/16] overflow-hidden rounded-md bg-ink">
+              <div className="relative aspect-square overflow-hidden rounded-md bg-ink">
                 {videoUrl ? (
                   <video src={videoUrl} controls className="h-full w-full bg-black object-contain" />
                 ) : (

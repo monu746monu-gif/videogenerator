@@ -1,9 +1,9 @@
 import type { Page } from "playwright";
 
 export const maxMappedPages = 6;
-export const maxWebsiteScenes = 10;
-export const maxScenes = 12;
-export const maxTotalRouteSeconds = 75;
+export const maxWebsiteScenes = 7;
+export const maxScenes = 9;
+export const maxTotalRouteSeconds = 60;
 
 export type WebsiteSection = {
   id: string;
@@ -23,11 +23,31 @@ export type WebsiteMapPage = {
   sections: WebsiteSection[];
 };
 
+export type WebsiteBrand = {
+  name: string;
+  logoText: string;
+  logoUrl?: string;
+  heroHeadline: string;
+  heroSubheadline: string;
+};
+
+export type WebsiteTheme = {
+  primaryColor: string;
+  accentColor: string;
+  backgroundColor: string;
+  surfaceColor: string;
+  textColor: string;
+  fontFamily: string;
+  colorPalette: string[];
+};
+
 export type WebsiteMap = {
   startUrl: string;
   origin: string;
   selectedPages: string[];
   pages: WebsiteMapPage[];
+  brand?: WebsiteBrand;
+  theme?: WebsiteTheme;
 };
 
 export type VideoScene = {
@@ -37,9 +57,18 @@ export type VideoScene = {
   pageUrl: string;
   targetText: string;
   sectionId?: string;
-  targetElementType: "hero" | "feature_card" | "button" | "pricing_card" | "testimonial" | "cta";
-  visualAction: "open_intro" | "open_page" | "scroll_to_section" | "zoom_to_element" | "highlight_element" | "hover_and_click" | "outro";
-  cameraMovement: "fade_in" | "slow_zoom" | "scroll_then_zoom" | "focus_highlight" | "click_focus" | "fade_out";
+  targetElementType: "hero" | "feature_card" | "process_step" | "button" | "pricing_card" | "testimonial" | "cta";
+  visualAction:
+    | "open_intro"
+    | "open_page"
+    | "scroll_to_section"
+    | "zoom_to_element"
+    | "highlight_element"
+    | "hover_and_click"
+    | "feature_showcase"
+    | "process_zoom"
+    | "outro";
+  cameraMovement: "fade_in" | "slide_in" | "slow_zoom" | "scroll_then_zoom" | "focus_highlight" | "click_focus" | "step_zoom" | "fade_out";
   interaction: "none" | "hover" | "click";
   overlayText: string;
   voiceover: string;
@@ -69,7 +98,7 @@ export const fixedSceneTypes = [
   "CTA / final action"
 ];
 
-const overusedPhrasePatterns = ["the focus here is", "this section shows", "this feature allows users to"];
+const overusedPhrasePatterns = ["the focus here is", "this section shows", "this feature allows users to", "introduces one clear idea"];
 
 export function compactText(value: unknown, maxLength = 280) {
   return String(value || "")
@@ -81,13 +110,13 @@ export function compactText(value: unknown, maxLength = 280) {
 export function clampSceneDuration(value: unknown) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 6;
-  return Math.min(10, Math.max(2, Math.round(parsed)));
+  return Math.min(8, Math.max(2, Math.round(parsed)));
 }
 
 export function normalizeVideoRoute(input: Partial<VideoRoute>, websiteMap: WebsiteMap): VideoRoute {
   const sections = websiteMap.pages.flatMap((page) => page.sections);
   const homepage = websiteMap.pages[0];
-  const fallbackProduct = compactText(homepage?.sections[0]?.heading || homepage?.title || new URL(websiteMap.startUrl).hostname, 80);
+  const fallbackProduct = compactText(websiteMap.brand?.name || homepage?.sections[0]?.heading || homepage?.title || new URL(websiteMap.startUrl).hostname, 80);
   const rawScenes = Array.isArray(input.scenes) ? input.scenes : [];
   let websiteScenes: VideoScene[] = rawScenes
     .filter((scene) => !["intro", "outro"].includes(String(scene?.sceneType || "").toLowerCase()))
@@ -104,9 +133,17 @@ export function normalizeVideoRoute(input: Partial<VideoRoute>, websiteMap: Webs
       pageUrl,
       targetText,
       sectionId: typeof scene?.sectionId === "string" ? scene.sectionId : fallbackSection?.id,
-      targetElementType: normalizeEnum(scene?.targetElementType, ["hero", "feature_card", "button", "pricing_card", "testimonial", "cta"], inferElementType(fallbackSection, index)),
-      visualAction: normalizeEnum(scene?.visualAction, ["open_intro", "open_page", "scroll_to_section", "zoom_to_element", "highlight_element", "hover_and_click", "outro"], index === 0 ? "open_page" : "zoom_to_element"),
-      cameraMovement: normalizeEnum(scene?.cameraMovement, ["fade_in", "slow_zoom", "scroll_then_zoom", "focus_highlight", "click_focus", "fade_out"], index === 0 ? "slow_zoom" : "focus_highlight"),
+      targetElementType: normalizeEnum(scene?.targetElementType, ["hero", "feature_card", "process_step", "button", "pricing_card", "testimonial", "cta"], inferElementType(fallbackSection, index)),
+      visualAction: normalizeEnum(
+        scene?.visualAction,
+        ["open_intro", "open_page", "scroll_to_section", "zoom_to_element", "highlight_element", "hover_and_click", "feature_showcase", "process_zoom", "outro"],
+        inferVisualAction(fallbackSection, index)
+      ),
+      cameraMovement: normalizeEnum(
+        scene?.cameraMovement,
+        ["fade_in", "slide_in", "slow_zoom", "scroll_then_zoom", "focus_highlight", "click_focus", "step_zoom", "fade_out"],
+        inferCameraMovement(fallbackSection, index)
+      ),
       interaction: normalizeEnum(scene?.interaction, ["none", "hover", "click"], inferInteraction(scene, fallbackSection, index)),
       overlayText: compactText(scene?.overlayText || scene?.title || targetText, 90),
       voiceover: sanitizeVoiceover(compactText(scene?.voiceover || voiceForSection(fallbackSection, fallbackProduct), 260)),
@@ -125,8 +162,8 @@ export function normalizeVideoRoute(input: Partial<VideoRoute>, websiteMap: Webs
       targetText: section.heading || section.text,
       sectionId: section.id,
       targetElementType: inferElementType(section, index),
-      visualAction: index === 0 ? "open_page" : "zoom_to_element",
-      cameraMovement: index === 0 ? "slow_zoom" : "focus_highlight",
+      visualAction: inferVisualAction(section, index),
+      cameraMovement: inferCameraMovement(section, index),
       interaction: inferInteraction({}, section, index),
       overlayText: section.heading || fallbackProduct,
       voiceover: voiceForSection(section, fallbackProduct),
@@ -138,7 +175,7 @@ export function normalizeVideoRoute(input: Partial<VideoRoute>, websiteMap: Webs
 
   websiteScenes = cleanupRepeatedVoiceovers(websiteScenes);
   const productName = compactText(input.productName || fallbackProduct, 80);
-  const tagline = compactText(input.tagline || homepage?.metaDescription || "", 140);
+  const tagline = compactText(input.tagline || websiteMap.brand?.heroSubheadline || websiteMap.brand?.heroHeadline || homepage?.metaDescription || "", 140);
   const scenes = fitRouteDuration([
     introScene(productName, tagline, websiteMap.startUrl),
     ...websiteScenes,
@@ -262,6 +299,7 @@ export async function focusTargetElement(page: Page, targetText: string, options
           previous.style.borderRadius = previous.dataset.syncedOriginalBorderRadius || "";
           previous.style.transform = previous.dataset.syncedOriginalTransform || "";
           previous.style.transition = previous.dataset.syncedOriginalTransition || "";
+          previous.style.filter = previous.dataset.syncedOriginalFilter || "";
           previous.removeAttribute("data-synced-video-focus");
         }
       };
@@ -299,7 +337,8 @@ export async function focusTargetElement(page: Page, targetText: string, options
       scrim.id = "__synced_video_focus_scrim";
       scrim.style.position = "fixed";
       scrim.style.inset = "0";
-      scrim.style.background = "rgba(3, 7, 18, 0.42)";
+      scrim.style.background = "radial-gradient(circle at center, rgba(255,255,255,0.02), rgba(3, 7, 18, 0.28))";
+      scrim.style.backdropFilter = "blur(6px)";
       scrim.style.zIndex = "2147483600";
       scrim.style.pointerEvents = "none";
       document.documentElement.appendChild(scrim);
@@ -311,14 +350,15 @@ export async function focusTargetElement(page: Page, targetText: string, options
       target.dataset.syncedOriginalBorderRadius = target.style.borderRadius;
       target.dataset.syncedOriginalTransform = target.style.transform;
       target.dataset.syncedOriginalTransition = target.style.transition;
+      target.dataset.syncedOriginalFilter = target.style.filter;
       target.dataset.syncedVideoFocus = "true";
       if (window.getComputedStyle(target).position === "static") target.style.position = "relative";
       target.style.zIndex = "2147483620";
-      target.style.outline = "4px solid rgba(56, 189, 248, 0.98)";
-      target.style.boxShadow = "0 0 0 10px rgba(56, 189, 248, 0.22), 0 24px 80px rgba(0, 0, 0, 0.38)";
+      target.style.outline = "none";
+      target.style.boxShadow = "0 34px 90px rgba(15, 23, 42, 0.30)";
       target.style.borderRadius = target.style.borderRadius || "16px";
-      target.style.transition = "transform 700ms ease, box-shadow 700ms ease, outline-color 700ms ease";
-      target.style.transform = `${target.style.transform || ""} scale(1.03)`.trim();
+      target.style.transition = "transform 1100ms cubic-bezier(.2,.8,.2,1), box-shadow 900ms ease";
+      target.style.transform = `${target.style.transform || ""} scale(1.12)`.trim();
 
       if (overlayText) {
         const rect = target.getBoundingClientRect();
@@ -331,9 +371,9 @@ export async function focusTargetElement(page: Page, targetText: string, options
         label.style.maxWidth = "500px";
         label.style.padding = "16px 20px";
         label.style.borderRadius = "14px";
-        label.style.background = "rgba(15, 23, 42, 0.94)";
-        label.style.color = "white";
-        label.style.font = "700 26px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        label.style.background = "rgba(255, 255, 255, 0.94)";
+        label.style.color = "#0f172a";
+        label.style.font = "800 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
         label.style.lineHeight = "1.18";
         label.style.boxShadow = "0 22px 60px rgba(0, 0, 0, 0.32)";
         label.style.zIndex = "2147483630";
@@ -352,6 +392,9 @@ export async function clearSceneDecorations(page: Page) {
     document.getElementById("__synced_video_overlay")?.remove();
     document.getElementById("__synced_video_focus_scrim")?.remove();
     document.getElementById("__synced_video_focus_label")?.remove();
+    document.getElementById("__synced_video_step_label")?.remove();
+    document.getElementById("__synced_video_cursor")?.remove();
+    document.getElementById("__director_captions")?.remove();
     const highlighted = document.querySelector("[data-synced-video-highlight='true']") as HTMLElement | null;
     if (highlighted) {
       highlighted.style.outline = highlighted.dataset.syncedOriginalOutline || "";
@@ -367,6 +410,7 @@ export async function clearSceneDecorations(page: Page) {
       focused.style.borderRadius = focused.dataset.syncedOriginalBorderRadius || "";
       focused.style.transform = focused.dataset.syncedOriginalTransform || "";
       focused.style.transition = focused.dataset.syncedOriginalTransition || "";
+      focused.style.filter = focused.dataset.syncedOriginalFilter || "";
       focused.removeAttribute("data-synced-video-focus");
     }
   });
@@ -399,11 +443,11 @@ function introScene(productName: string, tagline: string, pageUrl: string): Vide
     targetText: productName,
     targetElementType: "hero",
     visualAction: "open_intro",
-    cameraMovement: "fade_in",
+    cameraMovement: "slide_in",
     interaction: "none",
     overlayText: productName,
-    voiceover: tagline ? `Meet ${productName}. ${tagline}` : `Meet ${productName}, a product built to make the next step clearer.`,
-    estimatedDurationSeconds: 4,
+    voiceover: tagline ? `This is ${productName}. ${tagline}` : `This is ${productName}, a product built to make the next step clearer.`,
+    estimatedDurationSeconds: 5,
     fallbackAction: "Show the animated product intro."
   };
 }
@@ -462,10 +506,26 @@ function removeOverusedPhrases(sentence: string, phraseCounts: Map<string, numbe
 function inferElementType(section: WebsiteSection | undefined, index: number): VideoScene["targetElementType"] {
   const text = `${section?.heading || ""} ${section?.text || ""} ${(section?.buttonTexts || []).join(" ")}`.toLowerCase();
   if (index === 0) return "hero";
+  if (/how it works|how-it-works|workflow|step|process|use|setup|install|create|connect/.test(text)) return "process_step";
   if (/price|plan|billing|subscription/.test(text)) return "pricing_card";
   if (/testimonial|customer|review|trusted|proof/.test(text)) return "testimonial";
   if (/contact|get started|book|demo|start|try|launch/.test(text)) return "cta";
   return "feature_card";
+}
+
+function inferVisualAction(section: WebsiteSection | undefined, index: number): VideoScene["visualAction"] {
+  const text = `${section?.heading || ""} ${section?.text || ""}`.toLowerCase();
+  if (index === 0) return "open_page";
+  if (/how it works|how-it-works|workflow|step|process|use|setup|install|create|connect/.test(text)) return "process_zoom";
+  if (/feature|benefit|capability|tool|automate|manage|track|dashboard|integrat/.test(text)) return "feature_showcase";
+  return "zoom_to_element";
+}
+
+function inferCameraMovement(section: WebsiteSection | undefined, index: number): VideoScene["cameraMovement"] {
+  const action = inferVisualAction(section, index);
+  if (action === "process_zoom") return "step_zoom";
+  if (action === "feature_showcase") return "slide_in";
+  return index === 0 ? "slow_zoom" : "focus_highlight";
 }
 
 function inferInteraction(scene: unknown, section: WebsiteSection | undefined, index: number): VideoScene["interaction"] {
@@ -486,7 +546,7 @@ function voiceForSection(section: WebsiteSection | undefined, productName: strin
   const heading = compactText(section?.heading, 100);
   const visibleText = compactText(section?.text || heading, 170);
   if (!visibleText) return `${productName} gives visitors a clear reason to keep exploring.`;
-  if (heading) return `${heading} gives viewers one clear idea: ${visibleText}`;
+  if (heading) return `${heading}: ${visibleText}`;
   return visibleText;
 }
 
