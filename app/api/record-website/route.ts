@@ -2,7 +2,7 @@ import { access, unlink } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { convertToMp4, ensureGeneratedFolders } from "@/lib/media";
+import { convertToMp4, createVideoJob, safeJobDir } from "@/lib/media";
 import { normalizeHttpUrl } from "@/lib/url";
 import {
   canonicalUrl,
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   let context: BrowserContext | undefined;
 
   try {
-    const body = (await request.json()) as { url?: unknown; selectedPages?: unknown };
+    const body = (await request.json()) as { url?: unknown; selectedPages?: unknown; jobId?: unknown };
     const startUrl = normalizeHttpUrl(String(body.url || ""));
     const origin = new URL(startUrl).origin;
     const requestedPages = Array.isArray(body.selectedPages)
@@ -41,7 +41,12 @@ export async function POST(request: Request) {
 
     console.log("[record-website] starting URL", startUrl);
 
-    const { recordingsDir, videosDir } = await ensureGeneratedFolders();
+    const requestedJobId = typeof body.jobId === "string" ? body.jobId : "";
+    const standaloneJob = requestedJobId ? null : await createVideoJob();
+    const jobId = requestedJobId || standaloneJob!.jobId;
+    const jobRoot = standaloneJob?.rootDir || safeJobDir(jobId);
+    const recordingsDir = path.join(jobRoot, "recordings");
+    const videosDir = path.join(jobRoot, "final");
 
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({
@@ -120,7 +125,7 @@ export async function POST(request: Request) {
     await access(rawVideoPath);
     console.log("[record-website] raw video path", rawVideoPath);
 
-    const outputName = `full-walkthrough-${Date.now()}.mp4`;
+    const outputName = requestedJobId ? "recorded-walkthrough.mp4" : "final-video.mp4";
     const outputPath = path.join(videosDir, outputName);
     await convertToMp4(rawVideoPath, outputPath);
     await unlink(rawVideoPath).catch(() => undefined);
@@ -130,7 +135,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      videoUrl: `/generated/videos/${outputName}`,
+      jobId,
+      videoUrl: requestedJobId ? `/generated/jobs/${jobId}/final/${outputName}` : `/api/download-video?jobId=${jobId}`,
+      previewUrl: `/generated/jobs/${jobId}/final/${outputName}`,
       outputPath,
       visitedPages,
       selectedPages: selectedPages.map((link) => link.href)

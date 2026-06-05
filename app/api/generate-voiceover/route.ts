@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createVideoJob } from "@/lib/media";
 import { generateVoiceoverAudio } from "@/lib/voice";
 
 export const runtime = "nodejs";
@@ -12,8 +13,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Voice script is required." }, { status: 400 });
     }
 
-    const audio = await generateVoiceoverAudio(script);
-    return NextResponse.json(audio);
+    const job = await createVideoJob();
+    const audio = await generateVoiceoverAudio(script, {
+      audioDir: job.audioDir,
+      audioUrlBase: `/generated/jobs/${job.jobId}/audio`
+    });
+    return NextResponse.json({ ...audio, jobId: job.jobId });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to generate voiceover." },

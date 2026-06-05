@@ -7,14 +7,18 @@ export type CandidateLink = {
 export const maxSelectedPages = 5;
 
 export const importantKeywords = [
+  "home",
   "features",
   "product",
   "demo",
+  "how-it-works",
+  "how it works",
   "pricing",
   "about",
   "services",
   "solutions",
   "use-cases",
+  "use cases",
   "customers",
   "testimonials",
   "case-studies",
@@ -23,7 +27,22 @@ export const importantKeywords = [
 
 export const safeClickKeywords = ["get started", "try now", "book demo", "start free", "view demo", "learn more"];
 
-const blockedPathParts = ["login", "signin", "sign-in", "signup", "sign-up", "auth", "checkout", "cart", "payment", "billing"];
+const blockedPathParts = [
+  "login",
+  "signin",
+  "sign-in",
+  "signup",
+  "sign-up",
+  "auth",
+  "checkout",
+  "cart",
+  "payment",
+  "billing",
+  "privacy",
+  "terms",
+  "policy",
+  "cookies"
+];
 const fileExtensions = /\.(pdf|zip|rar|7z|jpg|jpeg|png|gif|webp|svg|mp4|mov|avi|webm|mp3|wav|doc|docx|xls|xlsx|ppt|pptx)$/i;
 const socialHosts = [
   "facebook.com",

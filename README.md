@@ -56,11 +56,18 @@ Open `http://localhost:3000`.
 
 The page also includes a secondary `Record silent walkthrough only` button that keeps the simple Playwright recording feature available.
 
-Generated assets are written to:
+Generated assets are written to a temporary job folder:
 
-- Raw recordings: `public/generated/recordings`
-- Voiceover audio: `public/generated/audio`
-- Final videos: `public/generated/videos`
+- `public/generated/jobs/{jobId}/recordings`
+- `public/generated/jobs/{jobId}/audio`
+- `public/generated/jobs/{jobId}/scenes`
+- `public/generated/jobs/{jobId}/screenshots`
+- `public/generated/jobs/{jobId}/final`
+- `public/generated/jobs/{jobId}/data`
+
+## Privacy
+
+Generated videos, recordings, scripts, website maps, and audio are temporary. Files are deleted after download or automatically cleaned after 1 hour.
 
 ## API Routes
 
@@ -83,6 +90,9 @@ Generated assets are written to:
 - `POST /api/generate-launch-video`
   - Body: `{ "url": "https://example.com" }`
   - Orchestrates analysis, recording, script generation, TTS, and FFmpeg merge.
+
+- `GET /api/download-video?jobId={jobId}`
+  - Downloads the final MP4 and deletes the temporary job folder after the stream completes.
 
 ## Limits
 

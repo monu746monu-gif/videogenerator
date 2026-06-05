@@ -72,7 +72,12 @@ Return only the voiceover script.`;
   }
 }
 
-export async function generateVoiceoverAudio(script: string) {
+type AudioOutputOptions = {
+  audioDir?: string;
+  audioUrlBase?: string;
+};
+
+export async function generateVoiceoverAudio(script: string, options: AudioOutputOptions = {}) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) {
     throw new Error("OPENAI_API_KEY is required to generate voiceover audio for this MVP.");
@@ -97,13 +102,66 @@ export async function generateVoiceoverAudio(script: string) {
     throw new Error(`OpenAI TTS failed. ${details}`.trim());
   }
 
-  const { audioDir } = await ensureGeneratedFolders();
+  const { audioDir } = options.audioDir ? { audioDir: options.audioDir } : await ensureGeneratedFolders();
   const audioName = `voiceover-${Date.now()}.mp3`;
   const audioPath = path.join(audioDir, audioName);
   await writeFile(audioPath, Buffer.from(await response.arrayBuffer()));
 
   return {
     audioPath,
-    audioUrl: `/generated/audio/${audioName}`
+    audioUrl: `${options.audioUrlBase || "/generated/audio"}/${audioName}`
   };
+}
+
+export async function tryGenerateSceneVoiceoverAudio(script: string, sceneNumber: number, timestamp: number, options: AudioOutputOptions = {}) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) {
+    return {
+      audioPath: "",
+      audioUrl: "",
+      warning: `Scene ${sceneNumber}: OPENAI_API_KEY is not set, using silent video.`
+    };
+  }
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        input: script,
+        response_format: "mp3"
+      })
+    });
+
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      return {
+        audioPath: "",
+        audioUrl: "",
+        warning: `Scene ${sceneNumber}: TTS failed, using silent video. ${details}`.trim()
+      };
+    }
+
+    const { audioDir } = options.audioDir ? { audioDir: options.audioDir } : await ensureGeneratedFolders();
+    const audioName = `scene-${sceneNumber}-${timestamp}.mp3`;
+    const audioPath = path.join(audioDir, audioName);
+    await writeFile(audioPath, Buffer.from(await response.arrayBuffer()));
+
+    return {
+      audioPath,
+      audioUrl: `${options.audioUrlBase || "/generated/audio"}/${audioName}`,
+      warning: ""
+    };
+  } catch (error) {
+    return {
+      audioPath: "",
+      audioUrl: "",
+      warning: `Scene ${sceneNumber}: TTS failed, using silent video. ${error instanceof Error ? error.message : ""}`.trim()
+    };
+  }
 }

@@ -1,6 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { ensureGeneratedFolders, mergeAudioWithVideo } from "@/lib/media";
+import { cleanupOldVideoJobs, createVideoJob, mergeAudioWithVideo } from "@/lib/media";
 import { normalizeHttpUrl } from "@/lib/url";
 import { generateVoiceoverAudio, generateVoiceScript, type WebsiteAnalysis } from "@/lib/voice";
 
@@ -21,31 +22,39 @@ export async function POST(request: Request) {
     const body = await request.json();
     const url = normalizeHttpUrl(String(body.url || ""));
     const origin = new URL(request.url).origin;
+    const job = await createVideoJob();
 
     console.log("[generate-launch-video] analyzing website");
     const analysis = await postJson<WebsiteAnalysis>(`${origin}/api/analyze-url`, { url });
+    await writeFile(path.join(job.dataDir, "website-analysis.json"), JSON.stringify(analysis, null, 2));
 
     console.log("[generate-launch-video] recording walkthrough");
     const recording = await postJson<RecordResponse>(`${origin}/api/record-website`, {
       url,
-      selectedPages: analysis.selectedPages
+      selectedPages: analysis.selectedPages,
+      jobId: job.jobId
     });
 
     console.log("[generate-launch-video] writing voice script");
     const script = await generateVoiceScript(analysis);
+    await writeFile(path.join(job.dataDir, "voiceover-script.txt"), script);
 
     console.log("[generate-launch-video] generating voiceover");
-    const { audioPath } = await generateVoiceoverAudio(script);
+    const { audioPath } = await generateVoiceoverAudio(script, {
+      audioDir: job.audioDir,
+      audioUrlBase: `/generated/jobs/${job.jobId}/audio`
+    });
 
     console.log("[generate-launch-video] creating final video");
-    const { videosDir } = await ensureGeneratedFolders();
-    const outputName = `final-launch-video-${Date.now()}.mp4`;
-    const outputPath = path.join(videosDir, outputName);
+    const outputPath = path.join(job.finalDir, "final-video.mp4");
     await mergeAudioWithVideo(recording.outputPath, audioPath, outputPath);
 
+    await cleanupOldVideoJobs();
     return NextResponse.json({
       success: true,
-      videoUrl: `/generated/videos/${outputName}`,
+      jobId: job.jobId,
+      videoUrl: `/api/download-video?jobId=${job.jobId}`,
+      previewUrl: `/generated/jobs/${job.jobId}/final/final-video.mp4`,
       script,
       productName: analysis.productName,
       tagline: analysis.tagline,
@@ -58,6 +67,8 @@ export async function POST(request: Request) {
       { success: false, error: error instanceof Error ? error.message : "Failed to generate launch video." },
       { status: 500 }
     );
+  } finally {
+    await cleanupOldVideoJobs().catch(() => undefined);
   }
 }
 
